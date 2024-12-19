@@ -71,6 +71,47 @@ def execute_query_with_dataframe(request):
             finally:
                 if os.path.exists(temp_file_path):
                     os.remove(temp_file_path)
+               
+        #Updates the max date to be compared at next run.     
+        def update_date_run(bq_client,query):
+            #query to fetch the max daterun
+            max_query="""
+            SELECT 
+            CAST(MAX(CAST(updateDtm AS DATETIME)) AS DATETIME) AS max_updateDtm_date
+            FROM 
+            {base_query}
+            """
+            query_job = bq_client.query(max_query)
+            results = query_job.result()
+            
+            for row in results:
+                max_date = row.max_updateDtm_date
+            
+            new_date_summary = {
+                "DATE_RUN": max_date,
+                "min_date": "null",
+                "max_date": "null"
+                }
+            
+            new_date_summary_json = json.dumps(new_date_summary)
+
+            update_query = """
+            UPDATE `st-npr-ukg-pro-data-hub-8100.UKG.delta`
+            SET date_summary = @new_date_summary
+            WHERE query_id = 7
+            """
+
+            query_parameters = [
+                bigquery.ScalarQueryParameter("new_date_summary", "STRING", new_date_summary_json)
+            ]
+
+            update_job = bq_client.query(
+                update_query,
+                job_config=bigquery.QueryJobConfig(query_parameters=query_parameters)
+            )
+            update_job.result()
+            
+            
         
         #-------------Process start-----------------#
         
@@ -100,6 +141,8 @@ def execute_query_with_dataframe(request):
         if accumulated_rows:
             upload_to_gcs(file_count, accumulated_rows)
             file_count += 1
+        
+        
         
         
 
