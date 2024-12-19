@@ -23,51 +23,93 @@ def execute_query_with_dataframe(request):
         storage_client = storage.Client(project=PROJECT_ID)
         bucket = storage_client.bucket(BUCKET_NAME)
         
-        
-        # Fetches and ammends the query
-        def FetchandAppendQuery(bq_client):
-            #fetching the query from delta table
-            fetch_query = """
-            SELECT query
+        #fetching the data from delta
+        def fetch_query_and_metadata(bq_client):
+            delta_table_query = """
+            SELECT 
+                query,
+                records_per_chunk,
+                file_prefix,
+                JSON_EXTRACT_SCALAR(date_summary, '$[0].DATE_RUN') AS date_run,
             FROM `st-npr-ukg-pro-data-hub-8100.UKG.delta`
             WHERE query_id = 2
             """
-            #executing the query
-            query_job = bq_client.query(fetch_query)
+            query_job = bq_client.query(delta_table_query)
             results = query_job.result()
-            
-            #Storing the query in a var
-            query_from_table = None
-            for row in results:
-                query_from_table = row["query"]
-                break
-            
-            if not query_from_table:
-                raise ValueError("No query found for query_id = 2")
-            
-            #query to get the lates updateDtm
-            datequery = """
-            SELECT date_summary
-            FROM `st-npr-ukg-pro-data-hub-8100.UKG.delta`
-            WHERE query_id = 5
-            """
-            
-            #executing the getupdateDtm query
-            query_job = bq_client.query(datequery)
-            results = query_job.result()
-            
-            # Fetch the first row
-            first_row = next(results)
 
-            # Convert DATE_RUN to a date object
-            date_run_str = first_row["DATE_RUN"]
-            #recent_date_run = datetime.datetime.strptime(date_run_str, "%Y-%m-%d").date()
+            for row in results:
+                return (
+                    row.query, 
+                    row.records_per_chunk, 
+                    row.file_prefix, 
+                    row.date_run,  
+                )
+
+            raise ValueError("No query, records_per_chunk, file prefix, or date_summary JSON found in the delta table.")
+        
+        #Generating a file prefix
+        def generate_dynamic_file_prefix(base_prefix, file_count):
+            current_time = datetime.datetime.now()
+            incremented_time = current_time + datetime.timedelta(minutes=file_count)
+            incremented_timestamp = incremented_time.strftime('%Y%m%d-%H%M')
+            return f"{base_prefix}_{incremented_timestamp}"
+        
+        #Uploder to GCS
+        def upload_to_gcs(file_count, data):
+            try:
+                file_name = generate_dynamic_file_prefix(base_prefix, file_count) + ".csv"
+                blob = bucket.blob(file_name)
+                blob.chunk_size = CHUNK_SIZE
+
+                with tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.csv') as temp_file:
+                    pd.DataFrame(data).to_csv(temp_file.name, index=False)
+                    temp_file_path = temp_file.name
+
+                with open(temp_file_path, 'rb') as file_data:
+                    blob.upload_from_file(file_data)
+                logging.info(f"Uploaded file {file_name}")
+            finally:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+        
+        #-------------Process start-----------------#
+        
+        #everything is now stored in var
+        base_query, records_per_chunk, base_prefix, date_run = fetch_query_and_metadata(bq_client)
+        
+        #Logic
+        #Fullquery where the updateDtm is greater than the previous run
+        final_query=f"""
+        select * from {base_query}
+        where CAST(updateDtm AS DATETIME) > CAST({date_run} AS DATETIME)
+        """
+        #executing the query
+        query_job = bq_client.query(final_query)
+        rows_iter = query_job.result(page_size=MAX_ROWS_PER_BATCH)
+        accumulated_rows = []
+        
+        #results processing
+        total_rows = 0
+        file_count = 0
+        for page in rows_iter.pages:
+            rows = [dict(row) for row in page]
+            accumulated_rows.extend(rows)
+            total_rows += len(rows)
+
+        #Fetches results are stored in a list and uploaded to GCS
+        if accumulated_rows:
+            upload_to_gcs(file_count, accumulated_rows)
+            file_count += 1
+        
+        
+
+
+        
+        
+
+        
             
-            finalquery = """
-            SELECT * FROM 
-            {query_from_table}
-            WHERE updateDtm > {date_run_str}
-            """
+        
             
             
             
