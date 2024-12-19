@@ -30,7 +30,7 @@ def execute_query_with_dataframe(request):
                 query,
                 records_per_chunk,
                 file_prefix,
-                JSON_EXTRACT_SCALAR(date_summary, '$[0].DATE_RUN') AS date_run,
+                JSON_EXTRACT_SCALAR(date_summary, '$[0].DATE_RUN') AS date_run
             FROM `st-npr-ukg-pro-data-hub-8100.UKG.delta`
             WHERE query_id = 2
             """
@@ -75,17 +75,21 @@ def execute_query_with_dataframe(request):
         #Updates the max date to be compared at next run.     
         def update_date_run(bq_client,query):
             #query to fetch the max daterun
-            max_query="""
+            max_query=f"""
             SELECT 
             CAST(MAX(CAST(updateDtm AS DATETIME)) AS DATETIME) AS max_updateDtm_date
             FROM 
-            {base_query}
+            {query}
             """
+            
             query_job = bq_client.query(max_query)
             results = query_job.result()
             
             for row in results:
                 max_date = row.max_updateDtm_date
+                
+            if max_date is None:
+                raise ValueError("No max_updateDtm_date found.")
             
             new_date_summary = {
                 "DATE_RUN": max_date,
@@ -110,6 +114,7 @@ def execute_query_with_dataframe(request):
                 job_config=bigquery.QueryJobConfig(query_parameters=query_parameters)
             )
             update_job.result()
+            logging.info("Updated date_summary column in the delta table.")
             
             
         
@@ -141,6 +146,9 @@ def execute_query_with_dataframe(request):
         if accumulated_rows:
             upload_to_gcs(file_count, accumulated_rows)
             file_count += 1
+            
+        #finaly update the date for the next run
+        update_date_run(bq_client,base_query)
         
         
         
