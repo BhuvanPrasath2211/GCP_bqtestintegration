@@ -73,9 +73,14 @@ def execute_query_with_dataframe(request):
                     
         #updates the datetime for the next run
         def update_delta_condition(next_run):
+             # Ensure next_run is a string
+            
+            next_run = next_run.isoformat()
+                
+                
             update_query = """
             UPDATE `st-npr-ukg-pro-data-hub-8100.UKG.delta`
-            SET delta_condition = @next_run
+            SET delta_condition = @next_run 
             WHERE query_id = 3
             """
             job_config = bigquery.QueryJobConfig(
@@ -83,15 +88,12 @@ def execute_query_with_dataframe(request):
                     bigquery.ScalarQueryParameter("next_run", "STRING", next_run)
                 ]
             )
-            try:
-                query_job = bq_client.query(update_query, job_config=job_config)
-                query_job.result()  # Wait for the query to finish
-                logging.info("Update successful")
-            except Exception as e:
-                logging.info(f"An error occurred: {e}")
-                    
             
-        
+            query_job = bq_client.query(update_query, job_config=job_config)
+            query_job.result()  # Wait for the query to finish
+            logging.info("Update successful")
+            
+                    
         #-------------Process start-----------------#
         
         #everything is now stored in var
@@ -102,17 +104,18 @@ def execute_query_with_dataframe(request):
                     last_run = datetime.datetime.strptime(last_run, "%Y-%m-%dT%H:%M:%S.%f")
             next_run = last_run + datetime.timedelta(hours=1)
         
+        
         #Logic
         #Fullquery where the updateDtm is greater than the previous run
         final_query = f"""
         SELECT * FROM ({base_query})
-        WHERE CAST(cdc_updateDtm as DATETIME) BETWEEN @last_run AND @next_run
+        WHERE CAST(cdc_updateDtm as DATETIME) BETWEEN CAST(@last_run AS DATETIME) AND CAST(@next_run AS DATETIME)
         """
         
         job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter("last_run", "STRING", last_run),
-            bigquery.ScalarQueryParameter("next_run", "STRING", next_run)
+            bigquery.ScalarQueryParameter("last_run", "DATETIME", last_run),
+            bigquery.ScalarQueryParameter("next_run", "DATETIME", next_run)
         ]
         )  
         
