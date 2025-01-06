@@ -109,7 +109,7 @@ def execute_query_with_dataframe(request):
         #Fullquery where the updateDtm is greater than the previous run
         final_query = f"""
         SELECT * FROM ({base_query})
-        WHERE CAST(cdc_updateDtm as DATETIME) > CAST(@last_run AS DATETIME)
+        WHERE CAST(updateDtm as DATETIME) > CAST(@last_run AS DATETIME)
         """
         
         job_config = bigquery.QueryJobConfig(
