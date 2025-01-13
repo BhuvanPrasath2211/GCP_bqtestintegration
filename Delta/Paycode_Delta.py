@@ -1,11 +1,12 @@
 from google.cloud import bigquery, storage
 import os
 import pandas as pd
-import datetime
+from datetime import datetime, timedelta
 import logging
 import tempfile
 import json
 from flask import jsonify
+from datetime import datetime
 
 # Constants
 PROJECT_ID = 'st-npr-ukg-pro-data-hub-8100'
@@ -31,7 +32,7 @@ def execute_query_with_dataframe(request):
                 file_prefix,
                 delta_condition AS last_run
             FROM `st-npr-ukg-pro-data-hub-8100.UKG.delta`
-            WHERE query_id = 3
+            WHERE query_id = 2
             """
             query_job = bq_client.query(delta_table_query)
             results = query_job.result()
@@ -48,13 +49,14 @@ def execute_query_with_dataframe(request):
         
         #Generating a file prefix
         def generate_dynamic_file_prefix(base_prefix, file_count):
-            current_time = datetime.datetime.now()
-            incremented_time = current_time + datetime.timedelta(hours=file_count)
+            current_time = datetime.now()
+            incremented_time = current_time + timedelta(hours=file_count)
             incremented_timestamp = incremented_time.strftime('%Y%m%d-%H%M')
             return f"{base_prefix}_{incremented_timestamp}"
         
         #Uploder to GCS
         def upload_to_gcs(file_count, data):
+            temp_file_path = None
             try:
                 file_name = generate_dynamic_file_prefix(base_prefix, file_count) + ".csv"
                 blob = bucket.blob(file_name)
@@ -68,20 +70,22 @@ def execute_query_with_dataframe(request):
                     blob.upload_from_file(file_data)
                 logging.info(f"Uploaded file {file_name}")
             finally:
-                if os.path.exists(temp_file_path):
+                if temp_file_path is not None and os.path.exists(temp_file_path):
                     os.remove(temp_file_path)
                     
         #updates the datetime for the next run
         def update_delta_condition(next_run):
-             # Ensure next_run is a string
+            # Check if next_run is a string and convert it to a datetime object if necessary
+            if isinstance(next_run, str):
+                next_run = datetime.strptime(next_run, "%Y-%m-%dT%H:%M:%S.%f")
             
+            # Ensure next_run is a datetime object before calling isoformat
             next_run = next_run.isoformat()
-                
                 
             update_query = """
             UPDATE `st-npr-ukg-pro-data-hub-8100.UKG.delta`
             SET delta_condition = @next_run 
-            WHERE query_id = 3
+            WHERE query_id = 2
             """
             job_config = bigquery.QueryJobConfig(
                 query_parameters=[
@@ -101,9 +105,27 @@ def execute_query_with_dataframe(request):
         
         if last_run:
             if isinstance(last_run, str):
-                    last_run = datetime.datetime.strptime(last_run, "%Y-%m-%dT%H:%M:%S.%f")
-            next_run = last_run + datetime.timedelta(hours=1)
+                    last_run = datetime.strptime(last_run, "%Y-%m-%dT%H:%M:%S.%f")
+        else:
+            delta_table_query = """
+            SELECT
+                JSON_EXTRACT_SCALAR(date_summary, '$.DATE_RUN') AS date_run
+            FROM `st-npr-ukg-pro-data-hub-8100.UKG.delta`
+            WHERE query_id = 2
+            """
+            query_job = bq_client.query(delta_table_query)
+            results = query_job.result()
+
+            for row in results:
+                last_run = row.date_run
+                if isinstance(last_run, str):
+                    last_run = datetime.strptime(last_run, "%Y-%m-%dT%H:%M:%S.%f")
         
+        # Get the current date and time
+        current_datetime = datetime.now()
+
+        # Format the current date and time
+        formatted_currentdatetime = current_datetime.strftime("%Y-%m-%dT%H:%M:%S.%f")
         
         #Logic
         #Fullquery where the updateDtm is greater than the previous run
@@ -114,8 +136,7 @@ def execute_query_with_dataframe(request):
         
         job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ScalarQueryParameter("last_run", "DATETIME", last_run),
-            bigquery.ScalarQueryParameter("next_run", "DATETIME", next_run)
+            bigquery.ScalarQueryParameter("last_run", "DATETIME", last_run)
         ]
         )  
         
@@ -138,7 +159,7 @@ def execute_query_with_dataframe(request):
             file_count += 1
             
         #finaly update the date for the next run
-        update_delta_condition(next_run)
+        update_delta_condition(formatted_currentdatetime)
         
         return jsonify({
                 "message": "CSV files created successfully",
