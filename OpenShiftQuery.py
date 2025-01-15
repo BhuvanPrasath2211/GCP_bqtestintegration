@@ -114,9 +114,11 @@ def execute_query_with_dataframe(request):
                 date_run AS recent_date_run,
                 end_date AS recent_end_date
             FROM `st-npr-ukg-pro-data-hub-8100.UKG.delta_processed`
-            WHERE CAST(end_process AS DATE) = (
+            WHERE pipeline = 'vScheduleOpenShift'
+            AND CAST(end_process AS DATE) = (
                 SELECT MAX(CAST(end_process AS DATE)) 
                 FROM `st-npr-ukg-pro-data-hub-8100.UKG.delta_processed`
+                WHERE pipeline = 'vScheduleOpenShift'
             )
             """
             query_job = bq_client.query(processed_query)
@@ -168,7 +170,7 @@ def execute_query_with_dataframe(request):
                     if delta_min_date >= next_start_date:
                         next_start_date = delta_min_date
 
-            if delta_date_run and recent_date_run and recent_date_run < delta_date_run:
+            if delta_date_run and recent_date_run < delta_date_run:
                 next_start_date = delta_date_run
 
             end_date = next_start_date + datetime.timedelta(days=records_per_chunk) if records_per_chunk else next_start_date + datetime.timedelta(days=1)
